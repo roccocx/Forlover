@@ -304,7 +304,18 @@ final class Updater
             return null;
         }
         $data = json_decode($raw, true);
-        return is_array($data) ? $data : null;
+        if (!is_array($data)) {
+            return null;
+        }
+        // The snapshot was computed against the version running at check
+        // time, so after an upgrade it goes stale and would keep offering
+        // the version just installed. Always re-derive has_new against
+        // the version running NOW.
+        if (!empty($data['latest'])) {
+            $data['has_new'] = self::verCmp((string)$data['latest'], VERSION) > 0;
+            $data['current'] = VERSION;
+        }
+        return $data;
     }
 
     // ---------- journal ----------
