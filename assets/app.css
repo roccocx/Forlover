@@ -22,6 +22,25 @@ body {
 .fl-navbar .navbar-brand {
   color: var(--fl-pink) !important;
 }
+/* Navbar controls: search box and all buttons share one height */
+.fl-navbar .form-control,
+.fl-navbar .btn {
+  height: 40px;
+  flex: 0 0 auto;
+}
+.fl-navbar form[role="search"] .btn {
+  white-space: nowrap;
+  min-width: 76px;
+  padding-left: 1.25rem;
+  padding-right: 1.25rem;
+}
+.fl-navbar #themeToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  padding: 0;
+}
 .fl-card {
   border: 1px solid var(--fl-pink-border);
   border-radius: 1rem;

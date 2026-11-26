@@ -375,6 +375,7 @@ try {
             'checkInfo' => $u->check(false),
             'journal' => $u->journal(),
             'backups' => $u->backups(),
+            'integrityCheck' => $u->cachedIntegrity(),
             'interrupted' => $u->interrupted(),
             'maintenanceOn' => Updater::maintenanceOn(),
             'schemaVersion' => $u->schemaVersion(),
@@ -435,6 +436,55 @@ try {
             redirect('/admin/update?ok=' . urlencode('备份完成，已出现在下方备份列表中'));
         } catch (Throwable $ex) {
             redirect('/admin/update?err=' . urlencode('备份失败：' . $ex->getMessage()));
+        }
+    }
+    elseif ($path === '/admin/update/backup-delete' && $method === 'POST') {
+        require_admin();
+        csrf_check_form();
+        try {
+            $tag = (string)($_POST['tag'] ?? '');
+            (new Updater())->deleteBackup($tag);
+            redirect('/admin/update?ok=' . urlencode('已删除备份：' . $tag));
+        } catch (Throwable $ex) {
+            redirect('/admin/update?err=' . urlencode('删除失败：' . $ex->getMessage()));
+        }
+    }
+    elseif ($path === '/admin/update/backup-verify' && $method === 'POST') {
+        require_admin();
+        csrf_check_form();
+        try {
+            $tag = (string)($_POST['tag'] ?? '');
+            $res = (new Updater())->verifyBackup($tag);
+            $msg = ($res['ok'] ? '完整性校验通过' : '完整性校验未通过') . '（' . $tag . '）：' . implode('；', $res['lines']);
+            redirect('/admin/update?' . ($res['ok'] ? 'ok=' : 'err=') . urlencode($msg));
+        } catch (Throwable $ex) {
+            redirect('/admin/update?err=' . urlencode('校验失败：' . $ex->getMessage()));
+        }
+    }
+    elseif ($path === '/admin/update/integrity' && $method === 'POST') {
+        require_admin();
+        csrf_check_form();
+        try {
+            $res = (new Updater())->verifyProgram();
+            if (empty($res['has_manifest'])) {
+                redirect('/admin/update?err=' . urlencode('云端没有找到 V' . VERSION . ' 的完整性表（该版本可能未正式发布，或更新服务器不可达）'));
+            }
+            if (!empty($res['ok'])) {
+                redirect('/admin/update?ok=' . urlencode('程序完整性校验通过：与官方 V' . VERSION . ' 完整性表一致（来源：' . Updater::channelLabel((string)$res['channel']) . '）' . (!empty($res['added']) ? '，另有 ' . count($res['added']) . ' 个新增文件待确认（见下方明细）' : '')));
+            }
+            $parts = [];
+            if (!empty($res['modified'])) {
+                $parts[] = '被修改 ' . count($res['modified']) . ' 个';
+            }
+            if (!empty($res['missing'])) {
+                $parts[] = '缺失 ' . count($res['missing']) . ' 个';
+            }
+            if (!empty($res['added'])) {
+                $parts[] = '新增 ' . count($res['added']) . ' 个';
+            }
+            redirect('/admin/update?err=' . urlencode('程序完整性校验未通过：' . implode('，', $parts) . '（见下方明细）'));
+        } catch (Throwable $ex) {
+            redirect('/admin/update?err=' . urlencode('校验失败：' . $ex->getMessage()));
         }
     }
     elseif ($path === '/admin/update/maintenance' && $method === 'POST') {

@@ -1,6 +1,6 @@
 <?php
 defined('FORLOVER') || exit;
-/** @var array $caps @var ?array $checkInfo @var array $journal @var array $backups @var bool $interrupted @var ?string $flash @var ?string $flashErr */
+/** @var array $caps @var ?array $checkInfo @var array $journal @var array $backups @var bool $interrupted @var ?string $flash @var ?string $flashErr @var ?array $integrityCheck */
 $modeLabel = ['full' => '全自动（一键升级）', 'upload' => '半自动（上传升级包）'][$caps['mode']] ?? $caps['mode'];
 ?>
 <h4 class="mb-4">系统升级</h4>
@@ -80,7 +80,7 @@ $modeLabel = ['full' => '全自动（一键升级）', 'upload' => '半自动（
         <?php else: ?>
           <p class="text-success mb-0">✓ 已是最新版本</p>
         <?php endif; ?>
-        <p class="text-muted small mt-2 mb-0">上次检查：<?= e(date('Y-m-d H:i:s', (int)($checkInfo['at'] ?? time()))) ?> · 来源：<?= e((string)($checkInfo['channel'] ?? '')) ?></p>
+        <p class="text-muted small mt-2 mb-0">上次检查：<?= e(date('Y-m-d H:i:s', (int)($checkInfo['at'] ?? time()))) ?> · 来源：<?= e(Updater::channelLabel((string)($checkInfo['channel'] ?? ''))) ?></p>
       <?php elseif ($checkInfo && !empty($checkInfo['error'])): ?>
         <p class="text-danger">检查失败：<?= e((string)$checkInfo['error']) ?></p>
       <?php else: ?>
@@ -150,15 +150,50 @@ $modeLabel = ['full' => '全自动（一键升级）', 'upload' => '半自动（
       <td><?= ($b['kind'] ?? 'upgrade') === 'manual' ? '手动备份' : '升级前备份' ?></td>
       <td><?= e((string)$b['from']) ?> → <?= e((string)$b['to']) ?></td>
       <td class="small text-muted"><?= e((string)$b['code']) ?><br><?= e((string)$b['db']) ?></td>
-      <td>
-        <form method="post" action="/admin/update/rollback" onsubmit="return confirm('确定回滚到该备份吗？当前文件与数据库会被覆盖。')">
+      <td class="text-nowrap">
+        <form method="post" action="/admin/update/rollback" class="d-inline-block" onsubmit="return confirm('确定回滚到该备份吗？当前文件与数据库会被覆盖。')">
           <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
           <input type="hidden" name="tag" value="<?= e((string)$b['tag']) ?>">
           <button class="btn btn-outline-warning btn-sm" type="submit">回滚</button>
+        </form>
+        <form method="post" action="/admin/update/backup-verify" class="d-inline-block">
+          <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
+          <input type="hidden" name="tag" value="<?= e((string)$b['tag']) ?>">
+          <button class="btn btn-outline-info btn-sm" type="submit">校验</button>
+        </form>
+        <form method="post" action="/admin/update/backup-delete" class="d-inline-block" onsubmit="return confirm('确定删除该备份吗？删除后不可恢复。')">
+          <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
+          <input type="hidden" name="tag" value="<?= e((string)$b['tag']) ?>">
+          <button class="btn btn-outline-danger btn-sm" type="submit">删除</button>
         </form>
       </td>
     </tr>
     <?php endforeach; ?>
   </table>
+  <?php endif; ?>
+</div></div>
+
+<div class="card mt-3"><div class="card-body">
+  <h5 class="card-title">程序完整性</h5>
+  <p class="text-muted mb-2">校验时从更新服务器下载本站当前版本（V<?= e(VERSION) ?>）的官方完整性表，逐文件比对 SHA-256。对照表随每个版本发布、只来自云端，本站不留自建基准。</p>
+  <form method="post" action="/admin/update/integrity">
+    <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
+    <button class="btn btn-outline-primary btn-sm" type="submit">校验程序文件</button>
+  </form>
+  <?php if ($integrityCheck && !empty($integrityCheck['has_manifest'])): ?>
+  <div class="mt-3">
+    <p class="mb-1">上次校验：<?= e((string)$integrityCheck['at']) ?> · 对照版本 V<?= e((string)$integrityCheck['version']) ?> · 来源：<?= e(Updater::channelLabel((string)($integrityCheck['channel'] ?? ''))) ?> ·
+      <?php if (!empty($integrityCheck['ok'])): ?><span class="text-success">✓ 完整，无改动无缺失</span><?php else: ?><span class="text-danger">✗ 发现异常</span><?php endif; ?>
+    </p>
+    <?php foreach (['modified' => '被修改', 'missing' => '缺失', 'added' => '新增（不在官方完整性表内）'] as $k => $label): ?>
+      <?php if (!empty($integrityCheck[$k])): ?>
+      <p class="mb-1 small"><strong><?= $label ?>（<?= count($integrityCheck[$k]) ?>）：</strong></p>
+      <ul class="small text-muted mb-2">
+        <?php foreach (array_slice($integrityCheck[$k], 0, 100) as $f): ?><li><code><?= e((string)$f) ?></code></li><?php endforeach; ?>
+        <?php if (count($integrityCheck[$k]) > 100): ?><li>…还有 <?= count($integrityCheck[$k]) - 100 ?> 个</li><?php endif; ?>
+      </ul>
+      <?php endif; ?>
+    <?php endforeach; ?>
+  </div>
   <?php endif; ?>
 </div></div>

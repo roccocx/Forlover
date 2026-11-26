@@ -15,7 +15,7 @@ $title = setting('title', 'SillyLi表白墙');
 <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>💌</text></svg>">
 <link rel="stylesheet" href="/assets/bootstrap.min.css">
-<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/app.css?v=<?= e(VERSION) ?>">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg fl-navbar sticky-top">
@@ -92,6 +92,6 @@ $title = setting('title', 'SillyLi表白墙');
 <div style="display:none"><?= setting('163music') ?></div>
 
 <script src="/assets/bootstrap.bundle.min.js"></script>
-<script src="/assets/app.js"></script>
+<script src="/assets/app.js?v=<?= e(VERSION) ?>"></script>
 </body>
 </html>

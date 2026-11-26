@@ -10,7 +10,7 @@ defined('FORLOVER') || exit;
 <title>后台管理 - <?= e(setting('title', 'SillyLi表白墙')) ?></title>
 <meta name="csrf-token" content="<?= e(csrf_token()) ?>">
 <link rel="stylesheet" href="/assets/bootstrap.min.css">
-<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/app.css?v=<?= e(VERSION) ?>">
 </head>
 <body>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark">

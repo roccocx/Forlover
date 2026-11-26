@@ -81,6 +81,18 @@ final class Updater
         return self::DEFAULT_CHANNELS;
     }
 
+    /** Display label for a channel URL; raw update-source URLs never reach the UI. */
+    public static function channelLabel(string $channel): string
+    {
+        $target = rtrim($channel, '/');
+        foreach (self::channels() as $i => $c) {
+            if (rtrim((string)$c, '/') === $target) {
+                return $i === 0 ? '主更新服务器' : ($i === 1 ? '备更新服务器' : '更新服务器 ' . ($i + 1));
+            }
+        }
+        return '更新服务器';
+    }
+
     // ---------- capabilities / degradation ----------
     public static function capabilities(): array
     {
@@ -649,6 +661,14 @@ final class Updater
             'code' => basename($codeFile),
             'db' => basename($dbFile),
             'added' => [],
+            'sha256' => [
+                'code' => self::sha256File($codeFile),
+                'db' => self::sha256File($dbFile),
+            ],
+            'size' => [
+                'code' => (int)filesize($codeFile),
+                'db' => (int)filesize($dbFile),
+            ],
         ];
         file_put_contents(self::backupDir() . '/meta-' . $tag . '.json', json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         return $tag;
@@ -669,6 +689,242 @@ final class Updater
         } finally {
             $this->releaseLock();
         }
+    }
+
+    /** List entry names inside a zip (either backend). @return string[] */
+    private function zipList(string $zipPath): array
+    {
+        if (class_exists('ZipArchive')) {
+            $zip = new ZipArchive();
+            if ($zip->open($zipPath) !== true) {
+                throw new RuntimeException('压缩包打开失败');
+            }
+            $out = [];
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $out[] = (string)$zip->getNameIndex($i);
+            }
+            $zip->close();
+            return $out;
+        }
+        return ZipUtil::listEntries($zipPath);
+    }
+
+    private function findBackup(string $tag): array
+    {
+        foreach ($this->backups() as $b) {
+            if ($b['tag'] === $tag) {
+                return $b;
+            }
+        }
+        throw new RuntimeException('备份不存在：' . $tag);
+    }
+
+    /** Delete one backup set (code zip + db dump + meta). */
+    public function deleteBackup(string $tag): void
+    {
+        $meta = $this->findBackup($tag);
+        $this->acquireLock();
+        try {
+            foreach (['code', 'db'] as $k) {
+                $name = (string)($meta[$k] ?? '');
+                $f = self::backupDir() . '/' . basename($name);
+                if ($name !== '' && is_file($f)) {
+                    unlink($f);
+                }
+            }
+            $mf = self::backupDir() . '/meta-' . $meta['tag'] . '.json';
+            if (is_file($mf)) {
+                unlink($mf);
+            }
+        } finally {
+            $this->releaseLock();
+        }
+    }
+
+    /**
+     * Verify one backup set. Sets whose meta carries sha256 baselines
+     * (made after this feature) get a hash comparison; older sets get
+     * structural checks only and are labelled as such.
+     * @return array{ok: bool, lines: string[]}
+     */
+    public function verifyBackup(string $tag): array
+    {
+        $meta = $this->findBackup($tag);
+        $lines = [];
+        $ok = true;
+        $base = $meta['sha256'] ?? null;
+        foreach (['code' => '代码包', 'db' => '数据库'] as $k => $label) {
+            $name = (string)($meta[$k] ?? '');
+            $f = self::backupDir() . '/' . basename($name);
+            if ($name === '' || !is_file($f)) {
+                $lines[] = $label . '：文件缺失（' . $name . '）';
+                $ok = false;
+                continue;
+            }
+            if (is_array($base) && !empty($base[$k])) {
+                if (self::sha256File($f) === (string)$base[$k]) {
+                    $lines[] = $label . '：哈希一致';
+                } else {
+                    $lines[] = $label . '：哈希不一致，文件可能已损坏或被改动';
+                    $ok = false;
+                }
+            } else {
+                $lines[] = $label . '：文件存在（' . (int)filesize($f) . ' 字节，无哈希基准）';
+            }
+        }
+        $codeFile = self::backupDir() . '/' . basename((string)($meta['code'] ?? ''));
+        if (is_file($codeFile)) {
+            try {
+                $entries = $this->zipList($codeFile);
+                $files = array_filter($entries, static fn($n) => !str_ends_with($n, '/'));
+                if ($files && in_array('index.php', $entries, true) && in_array('app/bootstrap.php', $entries, true)) {
+                    $lines[] = '代码包结构：可打开，共 ' . count($files) . ' 个文件，核心文件齐全';
+                } else {
+                    $lines[] = '代码包结构：异常（核心文件缺失）';
+                    $ok = false;
+                }
+            } catch (Throwable $ex) {
+                $lines[] = '代码包结构：打开失败（' . $ex->getMessage() . '）';
+                $ok = false;
+            }
+        }
+        $dbFile = self::backupDir() . '/' . basename((string)($meta['db'] ?? ''));
+        if (is_file($dbFile)) {
+            $head = (string)file_get_contents($dbFile, false, null, 0, 262144);
+            if (str_contains($head, 'CREATE TABLE') || str_contains($head, 'INSERT INTO')) {
+                $lines[] = '数据库结构：包含建表/数据语句';
+            } else {
+                $lines[] = '数据库结构：异常（未见建表/数据语句）';
+                $ok = false;
+            }
+        }
+        if (!is_array($base)) {
+            $lines[] = '注：该备份创建于哈希记录功能之前，未做哈希比对，仅结构校验';
+        }
+        return ['ok' => $ok, 'lines' => $lines];
+    }
+
+    // ---------- program integrity (official per-version manifest) ----------
+
+    /** @return array<string,string> relpath => sha256 for every program file (protected paths excluded) */
+    private function programHashes(): array
+    {
+        $out = [];
+        foreach ($this->siteFiles() as $rel) {
+            if (self::isProtected($rel)) {
+                continue;
+            }
+            $out[$rel] = self::sha256File(ROOT . '/' . $rel);
+        }
+        return $out;
+    }
+
+    /**
+     * Fetch the official integrity manifest for $version from the update
+     * channels. Prefers the standalone manifest file published next to
+     * the release package; falls back to reading manifest.json out of
+     * the package itself (older releases predate the standalone file).
+     * @return array{files: array, channel: string}|null
+     */
+    private function fetchVersionManifest(string $version): ?array
+    {
+        foreach (self::channels() as $channel) {
+            $base = rtrim((string)$channel, '/');
+            $res = $this->httpGet($base . '/releases/forlover-' . $version . '.manifest.json', 10, 262144);
+            if ($res !== null) {
+                $m = json_decode($res['body'], true);
+                if (is_array($m) && (string)($m['version'] ?? '') === $version && !empty($m['files']) && is_array($m['files'])) {
+                    return ['files' => $m['files'], 'channel' => (string)$channel];
+                }
+            }
+            $this->ensureDir(self::workDir());
+            $zip = self::workDir() . '/manifest-' . $version . '.zip';
+            if ($this->httpDownload($base . '/releases/forlover-' . $version . '.zip', $zip, 60)) {
+                $raw = $this->zipReadEntry($zip, 'manifest.json');
+                @unlink($zip);
+                if ($raw !== null) {
+                    $m = json_decode($raw, true);
+                    if (is_array($m) && (string)($m['version'] ?? '') === $version && !empty($m['files']) && is_array($m['files'])) {
+                        return ['files' => $m['files'], 'channel' => (string)$channel];
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Compare current program files against the official integrity
+     * manifest of the running version, downloaded from the update
+     * channels. No local baseline is kept: the manifest published with
+     * each release is the only reference, so a site whose files were
+     * already tampered with cannot bless itself.
+     * ok = nothing modified and nothing missing; added files are
+     * reported separately for the admin to judge.
+     * @return array{ok: bool, has_manifest: bool, at: string, version: string, channel: string, modified: string[], missing: string[], added: string[]}
+     */
+    public function verifyProgram(): array
+    {
+        $res = [
+            'ok' => false,
+            'has_manifest' => false,
+            'at' => date('Y-m-d H:i:s'),
+            'version' => VERSION,
+            'channel' => '',
+            'modified' => [],
+            'missing' => [],
+            'added' => [],
+        ];
+        $remote = $this->fetchVersionManifest(VERSION);
+        if ($remote !== null) {
+            $res['has_manifest'] = true;
+            $res['channel'] = $remote['channel'];
+            $ref = [];
+            foreach ((array)$remote['files'] as $rel => $sha) {
+                $rel = (string)$rel;
+                if (!str_starts_with($rel, 'payload/')) {
+                    continue; // manifest also lists migrations/deletions, not program files
+                }
+                $rel = substr($rel, 8);
+                if (str_starts_with($rel, 'app/cache/') || str_starts_with($rel, 'app/backups/')) {
+                    continue; // runtime dirs (incl. the packaged .gitkeep) are not program files
+                }
+                $ref[$rel] = (string)$sha;
+            }
+            $current = $this->programHashes();
+            foreach ($ref as $rel => $sha) {
+                if (!isset($current[$rel])) {
+                    $res['missing'][] = $rel;
+                } elseif ($current[$rel] !== $sha) {
+                    $res['modified'][] = $rel;
+                }
+            }
+            $res['added'] = array_values(array_diff(array_keys($current), array_keys($ref)));
+            sort($res['modified']);
+            sort($res['missing']);
+            sort($res['added']);
+            $res['ok'] = !$res['modified'] && !$res['missing'];
+        }
+        try {
+            $this->setSettingRaw('integrity_check', (string)json_encode($res, JSON_UNESCAPED_UNICODE));
+        } catch (Throwable) {
+            // persisting the result is best-effort
+        }
+        return $res;
+    }
+
+    public function cachedIntegrity(): ?array
+    {
+        try {
+            $raw = $this->getSettingRaw('integrity_check');
+        } catch (Throwable) {
+            return null;
+        }
+        if ($raw === '') {
+            return null;
+        }
+        $data = json_decode($raw, true);
+        return is_array($data) ? $data : null;
     }
 
     private function saveAddedFiles(string $tag, array $added): void
@@ -969,7 +1225,7 @@ final class Updater
             if (!$info['ok']) {
                 throw new RuntimeException('检查更新失败：' . ($info['error'] ?? '未知错误'));
             }
-            $this->step('检查更新', true, '当前 ' . VERSION . '，最新 ' . $info['latest'] . '（来源 ' . ($info['channel'] ?? '') . '）');
+            $this->step('检查更新', true, '当前 ' . VERSION . '，最新 ' . $info['latest'] . '（来源 ' . self::channelLabel((string)($info['channel'] ?? '')) . '）');
             if (!$info['has_new']) {
                 $this->journalFinish('done', '已是最新版本');
                 return;
@@ -1004,15 +1260,15 @@ final class Updater
                     unlink($zipPath);
                 }
                 if (!$this->httpDownload($url, $zipPath)) {
-                    $this->step('下载升级包', false, '来源 ' . $channel . ' 下载失败，尝试下一个');
+                    $this->step('下载升级包', false, '来源 ' . self::channelLabel((string)$channel) . ' 下载失败，尝试下一个');
                     continue;
                 }
                 $actual = self::sha256File($zipPath);
                 if (!hash_equals((string)$info['package']['sha256'], $actual)) {
-                    $this->step('下载升级包', false, '来源 ' . $channel . ' 整包哈希不一致，尝试下一个');
+                    $this->step('下载升级包', false, '来源 ' . self::channelLabel((string)$channel) . ' 整包哈希不一致，尝试下一个');
                     continue;
                 }
-                $this->step('下载升级包', true, '来源 ' . $channel . ' · 整包 SHA-256 校验通过');
+                $this->step('下载升级包', true, '来源 ' . self::channelLabel((string)$channel) . ' · 整包 SHA-256 校验通过');
                 $downloaded = true;
                 break;
             }
