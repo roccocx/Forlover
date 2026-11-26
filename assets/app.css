@@ -26,7 +26,16 @@ body {
 .fl-navbar .form-control,
 .fl-navbar .btn {
   height: 40px;
+}
+.fl-navbar .btn {
   flex: 0 0 auto;
+}
+.fl-navbar form[role="search"] {
+  min-width: 0;
+}
+.fl-navbar form[role="search"] .form-control {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .fl-navbar form[role="search"] .btn {
   white-space: nowrap;
