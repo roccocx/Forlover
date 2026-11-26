@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 define('FORLOVER', true);
 define('ROOT', dirname(__DIR__));
-define('VERSION', '2.0.0');
+define('VERSION', '2.0.1');
 define('PROJECT_URL', 'https://github.com/roccocx/Forlover');
 
 function config(): array
