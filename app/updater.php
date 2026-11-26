@@ -42,6 +42,36 @@ final class Updater
         return self::cacheDir() . '/maintenance.flag';
     }
 
+    /**
+     * Version comparison with semver-style pre-release handling.
+     * PHP's version_compare does not know the "-pre" suffix (it sorts
+     * 2.0.0-pre ABOVE 2.0.0), so split the suffix off first: a suffixed
+     * build sorts before the same base release.
+     */
+    public static function verCmp(string $a, string $b): int
+    {
+        $split = static function (string $v): array {
+            $pos = strpos($v, '-');
+            return $pos === false ? [$v, ''] : [substr($v, 0, $pos), substr($v, $pos + 1)];
+        };
+        [$baseA, $sufA] = $split($a);
+        [$baseB, $sufB] = $split($b);
+        $c = version_compare($baseA, $baseB);
+        if ($c !== 0) {
+            return $c;
+        }
+        if ($sufA === $sufB) {
+            return 0;
+        }
+        if ($sufA === '') {
+            return 1;
+        }
+        if ($sufB === '') {
+            return -1;
+        }
+        return version_compare($a, $b);
+    }
+
     public static function channels(): array
     {
         $ch = config()['update_channels'] ?? null;
@@ -235,7 +265,7 @@ final class Updater
                     'size' => (int)($data['package']['size'] ?? 0),
                 ],
                 'migrations' => array_values(array_map('strval', (array)($data['migrations'] ?? []))),
-                'has_new' => version_compare((string)$data['latest'], VERSION, '>'),
+                'has_new' => self::verCmp((string)$data['latest'], VERSION) > 0,
                 'error' => '',
             ]);
             break;
@@ -365,7 +395,7 @@ final class Updater
     /** Paths the updater must never overwrite or delete. */
     private static function isProtected(string $rel): bool
     {
-        return $rel === 'config.php' || $rel === 'install.lock'
+        return $rel === 'config.php' || $rel === 'install.lock' || $rel === '.user.ini'
             || str_starts_with($rel, 'app/cache/') || $rel === 'app/cache'
             || str_starts_with($rel, 'app/backups/') || $rel === 'app/backups';
     }
@@ -382,6 +412,9 @@ final class Updater
             $rel = str_replace('\\', '/', substr($file->getPathname(), strlen(ROOT) + 1));
             if (str_starts_with($rel, 'app/cache/') || str_starts_with($rel, 'app/backups/')) {
                 continue;
+            }
+            if ($rel === '.user.ini') {
+                continue; // host-managed (immutable on Baota), never back up or restore
             }
             $files[] = $rel;
         }
@@ -946,7 +979,7 @@ final class Updater
             if (version_compare(PHP_VERSION, $minPhp, '<')) {
                 throw new RuntimeException('PHP 版本过低：需要 ≥ ' . $minPhp . '，当前 ' . PHP_VERSION);
             }
-            if (!empty($info['from']) && version_compare(VERSION, (string)$info['from'], '<')) {
+            if (!empty($info['from']) && self::verCmp(VERSION, (string)$info['from']) < 0) {
                 throw new RuntimeException('当前版本 ' . VERSION . ' 过旧，不能直接升级到 ' . $info['latest'] . '（要求 ≥ ' . $info['from'] . '）');
             }
             if (!is_writable(ROOT)) {
@@ -1017,7 +1050,7 @@ final class Updater
             }
             $target = (string)$manifest['version'];
             $this->journalStart($target);
-            if (!version_compare($target, VERSION, '>')) {
+            if (self::verCmp($target, VERSION) <= 0) {
                 throw new RuntimeException('升级包版本 ' . $target . ' 不高于当前版本 ' . VERSION);
             }
             // Cross-check against the channel when reachable.
