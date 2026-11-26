@@ -1,0 +1,7 @@
+config.php
+install.lock
+app/cache/*
+!app/cache/.gitkeep
+app/backups/
+dist/
+*.muse-github-snapshot-sync.json

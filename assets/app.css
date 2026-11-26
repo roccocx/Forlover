@@ -1,0 +1,94 @@
+/* SillyLi 表白墙 V2 theme (over Bootstrap 5.3) */
+:root {
+  --fl-pink: #ff5c8a;
+  --fl-pink-soft: #fff0f4;
+  --fl-pink-border: #ffd3e0;
+}
+body {
+  background: linear-gradient(180deg, #fff5f8 0%, #ffffff 240px);
+  min-height: 100vh;
+}
+[data-bs-theme="dark"] body {
+  background: linear-gradient(180deg, #2b1a20 0%, #212529 240px);
+}
+.fl-navbar {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 12px rgba(255, 92, 138, 0.12);
+}
+[data-bs-theme="dark"] .fl-navbar {
+  background: rgba(33, 37, 41, 0.88);
+}
+.fl-navbar .navbar-brand {
+  color: var(--fl-pink) !important;
+}
+.fl-card {
+  border: 1px solid var(--fl-pink-border);
+  border-radius: 1rem;
+  box-shadow: 0 0.25rem 1rem rgba(255, 92, 138, 0.08);
+}
+[data-bs-theme="dark"] .fl-card {
+  border-color: #4a2c36;
+}
+.fl-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--fl-pink-border);
+}
+.fl-avatar-sm {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.fl-towho {
+  color: var(--fl-pink);
+  font-weight: 700;
+}
+.fl-content {
+  font-size: 1.05rem;
+  line-height: 1.7;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.fl-like {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0.25rem 0.5rem;
+  border-radius: 2rem;
+}
+.fl-like:hover {
+  background: var(--fl-pink-soft);
+}
+.fl-like.liked {
+  color: var(--fl-pink);
+  font-weight: 700;
+}
+.fl-comment-link {
+  color: inherit;
+  text-decoration: none;
+}
+.fl-comment-link:hover {
+  color: var(--fl-pink);
+}
+.fl-footer {
+  color: #888;
+  font-size: 0.9rem;
+}
+.fl-about h4 {
+  margin-top: 1.2rem;
+  color: var(--fl-pink);
+}
+.fl-about h4:first-child {
+  margin-top: 0;
+}
+.fl-cell-content {
+  max-width: 320px;
+}
+.fl-login-body {
+  background: linear-gradient(160deg, #ffe3ec, #fff5f8);
+  min-height: 100vh;
+}
