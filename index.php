@@ -487,6 +487,16 @@ try {
             redirect('/admin/update?err=' . urlencode('校验失败：' . $ex->getMessage()));
         }
     }
+    elseif ($path === '/admin/update/repair' && $method === 'POST') {
+        require_admin();
+        csrf_check_form();
+        try {
+            $msg = (new Updater())->repair();
+            redirect('/admin/update?ok=' . urlencode($msg));
+        } catch (Throwable $ex) {
+            redirect('/admin/update?err=' . urlencode($ex->getMessage()));
+        }
+    }
     elseif ($path === '/admin/update/maintenance' && $method === 'POST') {
         require_admin();
         csrf_check_form();

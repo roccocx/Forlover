@@ -147,7 +147,7 @@ $modeLabel = ['full' => '全自动（一键升级）', 'upload' => '半自动（
     <?php foreach ($backups as $b): ?>
     <tr>
       <td><?= e((string)$b['at']) ?></td>
-      <td><?= ($b['kind'] ?? 'upgrade') === 'manual' ? '手动备份' : '升级前备份' ?></td>
+      <td><?= ['manual' => '手动备份', 'repair' => '修复前备份'][$b['kind'] ?? ''] ?? '升级前备份' ?></td>
       <td><?= e((string)$b['from']) ?> → <?= e((string)$b['to']) ?></td>
       <td class="small text-muted"><?= e((string)$b['code']) ?><br><?= e((string)$b['db']) ?></td>
       <td class="text-nowrap">
@@ -194,6 +194,13 @@ $modeLabel = ['full' => '全自动（一键升级）', 'upload' => '半自动（
       </ul>
       <?php endif; ?>
     <?php endforeach; ?>
+    <?php if (empty($integrityCheck['ok'])): ?>
+    <form method="post" action="/admin/update/repair" class="mt-2" onsubmit="return confirm('确定按官方 V<?= e(VERSION) ?> 一键修复吗？将先自动备份，再用官方文件覆盖被修改/缺失的文件（不影响数据与配置）。')">
+      <input type="hidden" name="_csrf" value="<?= e(csrf_token()) ?>">
+      <button class="btn btn-warning btn-sm" type="submit">一键修复（按官方 V<?= e(VERSION) ?> 还原）</button>
+      <span class="text-muted small ms-2">若更新服务器已不再提供本版本，将提示改为升级到最近版本。</span>
+    </form>
+    <?php endif; ?>
   </div>
   <?php endif; ?>
 </div></div>

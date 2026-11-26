@@ -1224,6 +1224,164 @@ final class Updater
         }
     }
 
+    /**
+     * One-click repair: when program files differ from the official
+     * files of the RUNNING version (tampered, half-overwritten, mixed
+     * versions), download that version's package from the channels and
+     * restore the payload. Same journal / backup / maintenance /
+     * rollback discipline as an upgrade, but no DB migrations (the
+     * version does not change). If the channels no longer serve the
+     * running version at all, the repair is refused and the admin is
+     * told to upgrade to the nearest version the channels do serve.
+     * Returns a human-readable summary for the flash message.
+     */
+    public function repair(): string
+    {
+        @set_time_limit(0);
+        ignore_user_abort(true);
+        $this->acquireLock();
+        try {
+            $this->journalStart(VERSION);
+            if (!is_writable(ROOT)) {
+                throw new RuntimeException('站根目录不可写，无法修复');
+            }
+            // fresh comparison against the cloud manifest of THIS version
+            $res = $this->verifyProgram();
+            if (empty($res['has_manifest'])) {
+                $this->upgradeInstead('更新服务器上取不到 V' . VERSION . ' 的官方文件，无法按当前版本修复');
+            }
+            $this->step('完整性校验', true, '对照来源：' . self::channelLabel((string)$res['channel']));
+            if (!empty($res['ok'])) {
+                $this->journalFinish('done', '程序文件与官方 V' . VERSION . ' 一致，无需修复');
+                return '程序文件与官方 V' . VERSION . ' 一致，无需修复';
+            }
+            $bad = array_merge((array)$res['modified'], (array)$res['missing']);
+            $this->step('发现异常', true, '被修改 ' . count((array)$res['modified']) . ' 个、缺失 ' . count((array)$res['missing']) . ' 个，将按官方 V' . VERSION . ' 还原');
+
+            // reference file map for the cross-check against the package
+            $remote = $this->fetchVersionManifest(VERSION);
+
+            // download this version's package, manifest channel first
+            $zipPath = self::workDir() . '/repair.zip';
+            $this->ensureDir(self::workDir());
+            $first = (string)($res['channel'] ?? '');
+            $ordered = array_merge($first !== '' ? [$first] : [], array_diff(self::channels(), [$first]));
+            $downloaded = false;
+            foreach ($ordered as $channel) {
+                $url = rtrim((string)$channel, '/') . '/releases/forlover-' . VERSION . '.zip';
+                if (is_file($zipPath)) {
+                    unlink($zipPath);
+                }
+                if ($this->httpDownload($url, $zipPath, 120)) {
+                    $this->step('下载修复包', true, '来源 ' . self::channelLabel((string)$channel));
+                    $downloaded = true;
+                    break;
+                }
+                $this->step('下载修复包', false, '来源 ' . self::channelLabel((string)$channel) . ' 下载失败，尝试下一个');
+            }
+            if (!$downloaded) {
+                $this->upgradeInstead('更新服务器已不再提供 V' . VERSION . ' 的安装包，无法按当前版本修复');
+            }
+            return $this->applyRepair($zipPath, $remote['files'] ?? null, count($bad));
+        } catch (Throwable $ex) {
+            $j = $this->journal();
+            if (($j['status'] ?? '') === 'running') {
+                $this->journalFinish('failed', $ex->getMessage());
+            }
+            throw $ex;
+        } finally {
+            $this->releaseLock();
+        }
+    }
+
+    /** Refuse a repair because the running version cannot be fetched; point at the nearest served version. */
+    private function upgradeInstead(string $reason): void
+    {
+        $info = $this->check(true);
+        if (!empty($info['ok']) && !empty($info['has_new'])) {
+            throw new RuntimeException($reason . '。请升级到服务器提供的最近版本 V' . $info['latest'] . '（上方“检查更新”卡片可直接一键升级）。');
+        }
+        throw new RuntimeException($reason . '，且未检查到可升级的新版本，请稍后再试或检查更新源连通性。');
+    }
+
+    private function applyRepair(string $zipPath, ?array $refFiles, int $badCount): string
+    {
+        $manifestRaw = $this->zipReadEntry($zipPath, 'manifest.json');
+        if ($manifestRaw === null) {
+            throw new RuntimeException('修复包缺少 manifest.json');
+        }
+        $manifest = json_decode($manifestRaw, true);
+        if (!is_array($manifest) || (string)($manifest['version'] ?? '') !== VERSION) {
+            throw new RuntimeException('修复包版本与当前版本不一致');
+        }
+        // when the standalone integrity table was fetched on its own,
+        // the package's built-in table must agree with it
+        if ($refFiles !== null && (array)($manifest['files'] ?? []) != $refFiles) {
+            throw new RuntimeException('修复包内完整性表与更新服务器上的独立完整性表不一致，已中止');
+        }
+        $tmp = self::workDir() . '/tmp';
+        $this->rrmdir($tmp);
+        $this->ensureDir($tmp);
+        $this->zipExtract($zipPath, $tmp);
+        $checked = 0;
+        foreach ((array)($manifest['files'] ?? []) as $rel => $sha) {
+            $f = $tmp . '/' . $rel;
+            if (!is_file($f) || !hash_equals((string)$sha, self::sha256File($f))) {
+                throw new RuntimeException('文件完整性校验失败：' . $rel);
+            }
+            $checked++;
+        }
+        $this->step('完整性校验', true, $checked . ' 个文件逐一通过 SHA-256 校验');
+
+        $tag = $this->makeBackup(VERSION, 'repair');
+
+        $this->setMaintenance(true);
+        $this->step('维护模式', true, '前台已暂停访问');
+        try {
+            $added = $this->copyTree($tmp . '/payload', ROOT);
+            $this->saveAddedFiles($tag, $added);
+            $this->step('还原文件', true, '已按官方 V' . VERSION . ' 覆盖还原（异常文件 ' . $badCount . ' 个）');
+
+            $delFile = $tmp . '/deletions.txt';
+            if (is_file($delFile)) {
+                $n = 0;
+                foreach (file($delFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+                    $rel = ZipUtil::safeRel(trim((string)$line));
+                    if ($rel !== null && !self::isProtected($rel) && is_file(ROOT . '/' . $rel)) {
+                        unlink(ROOT . '/' . $rel);
+                        $n++;
+                    }
+                }
+                if ($n > 0) {
+                    $this->step('删除旧文件', true, $n . ' 个');
+                }
+            }
+
+            [$ok, $note] = $this->selfCheck(VERSION);
+            $this->step('修复自检', $ok, $note);
+            if (!$ok) {
+                throw new RuntimeException('自检未通过：' . $note);
+            }
+        } catch (Throwable $ex) {
+            $this->step('自动回滚', false, '修复失败，正在回滚：' . $ex->getMessage());
+            $this->setMaintenance(false);
+            $this->rollbackQuiet($tag);
+            $this->journalFinish('rolled-back', '修复失败并已自动回滚：' . $ex->getMessage());
+            throw new RuntimeException('修复失败，已自动回滚。原因：' . $ex->getMessage());
+        }
+        $this->setMaintenance(false);
+        $this->step('完成', true, '已按官方 V' . VERSION . ' 还原 ' . $badCount . ' 个异常文件（页面刷新后生效）');
+        $this->rrmdir(self::workDir() . '/tmp');
+        if (function_exists('opcache_reset')) {
+            @opcache_reset();
+        }
+        $summary = '修复成功：程序文件已与官方 V' . VERSION . ' 一致（还原 ' . $badCount . ' 个异常文件）';
+        $this->journalFinish('done', $summary);
+        // refresh the stored integrity result so the card shows the repaired state
+        $this->verifyProgram();
+        return $summary;
+    }
+
     /** One-click upgrade from the update channels. */
     public function run(): void
     {
