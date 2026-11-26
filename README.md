@@ -36,3 +36,7 @@ migrate/           V1→V2 迁移脚本（CLI）
 - 管理员密码 `password_hash` 存储（V1 为明文，迁移时强制重设）
 - 点赞独立成表；评论数冗余计数；软删除（可恢复）
 - 表情 emoji 可存（utf8mb4）；分页 bug 已修（V1 每页条数随页码膨胀）
+
+## 开源协议
+
+MIT License，见 [LICENSE](LICENSE)。
